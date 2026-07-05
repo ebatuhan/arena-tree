@@ -1,4 +1,4 @@
-use crate::node_id::NodeId;
+pub use crate::node_id::NodeId;
 
 mod node_id;
 
@@ -55,6 +55,28 @@ impl<T> Tree<T> {
         }
     }
 
+    pub fn traverse_with_depth(
+        &self,
+        root: NodeId,
+    ) -> impl Iterator<Item = (NodeId, &T, usize)> + '_ {
+        self.traverse_nodes_with_depth(root)
+            .map(|(id, node, depth)| (id, &node.value, depth))
+    }
+
+    pub fn traverse_ids_with_depth(
+        &self,
+        root: NodeId,
+    ) -> impl Iterator<Item = (NodeId, usize)> + '_ {
+        self.traverse_nodes_with_depth(root)
+            .map(|(id, _, depth)| (id, depth))
+    }
+
+    fn traverse_nodes_with_depth(&self, root: NodeId) -> TreeNodeDepthTraversal<'_, T> {
+        TreeNodeDepthTraversal {
+            stack: vec![(root, 0)],
+            tree: self,
+        }
+    }
 
     //TODO double detach will be fixed
     pub fn insert_to(&mut self, value: T, parent_id: NodeId) -> NodeId {
@@ -293,9 +315,30 @@ pub enum Placement {
     In,
 }
 
+struct TreeNodeDepthTraversal<'a, T> {
+    stack: Vec<(NodeId, usize)>,
+    tree: &'a Tree<T>,
+}
+
 struct TreeNodeTraversal<'a, T> {
     stack: Vec<NodeId>,
     tree: &'a Tree<T>,
+}
+
+impl<'a, T> Iterator for TreeNodeDepthTraversal<'a, T> {
+    type Item = (NodeId, &'a Node<T>, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (node_id, depth) = self.stack.pop()?;
+
+        let node = self.tree.get_node(node_id)?;
+
+        for child in node.children.iter().rev() {
+            self.stack.push((*child, depth + 1));
+        }
+
+        Some((node_id, node, depth))
+    }
 }
 
 impl<'a, T> Iterator for TreeNodeTraversal<'a, T> {
