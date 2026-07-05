@@ -2,7 +2,6 @@ use crate::node_id::NodeId;
 
 mod node_id;
 
-
 #[derive(Debug)]
 struct Node<T> {
     value: T,
@@ -52,7 +51,7 @@ impl<T> Tree<T> {
             }
         };
 
-        let  node = Node {
+        let node = Node {
             value,
             parent: None,
             children: Vec::new(),
@@ -121,42 +120,78 @@ impl<T> Tree<T> {
     }
 
     pub fn get(&self, id: NodeId) -> Option<&T> {
-        let node = self.get_node(id);
-
-        if let Some(node) = node {
-            Some(&node.value)
-        } else {
-            None
-        }
+        self.nodes
+            .get(id.index())?
+            .as_ref()
+            .filter(|node| node.generation == id.generation())
+            .map(|node| &node.value)
     }
 
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut T> {
-        let node = self.get_node_mut(id);
-
-        if let Some(node) = node {
-            Some(&mut node.value)
-        } else {
-            None
-        }
+        self.nodes
+            .get_mut(id.index())?
+            .as_mut()
+            .filter(|node| node.generation == id.generation())
+            .map(|node| &mut node.value)
     }
 
     fn get_node(&self, id: NodeId) -> Option<&Node<T>> {
-        let node = self.nodes.get(id.index())?.as_ref()?;
-
-        if node.generation == id.generation() {
-            Some(node)
-        } else {
-            None
-        }
+        self.nodes
+            .get(id.index())?
+            .as_ref()
+            .filter(|node| node.generation == id.generation())
     }
 
     fn get_node_mut(&mut self, id: NodeId) -> Option<&mut Node<T>> {
-        let node = self.nodes.get_mut(id.index())?.as_mut()?;
-        if node.generation == id.generation() {
-            Some(node)
-        } else {
-            None
+        self.nodes
+            .get_mut(id.index())?
+            .as_mut()
+            .filter(|node| node.generation == id.generation())
+    }
+
+    pub fn move_node(&mut self, id: NodeId, target_id: NodeId, placement: Placement) {
+        if id == target_id {
+            return;
         }
+
+        if Some(id) == self.root {
+            return;
+        }
+
+        if self.get_node(id).is_none() || self.get_node(target_id).is_none() {
+            return;
+        }
+
+        if self.is_ancestor(id, target_id) {
+            return;
+        }
+
+        let Some(parent_id) = self.get_node(target_id).and_then(|node| node.parent) else {
+            return;
+        };
+
+        self.detach_from_parent(id);
+
+        let Some(target_position) = self.find_child_index(target_id) else {
+            return;
+        };
+
+        let offset: usize = match placement {
+            Placement::After => 1,
+            Placement::Before => 0,
+        };
+
+        self.get_node_mut(parent_id)
+            .unwrap()
+            .children
+            .insert(target_position + offset, id);
+
+        self.get_node_mut(id).unwrap().parent = Some(parent_id);
+    }
+
+    fn find_child_index(&self, id: NodeId) -> Option<usize> {
+        self.get_parent_node(id)
+            .and_then(|node| node.children.iter().position(|node_id| node_id == &id))
     }
 
     pub fn set_parent(&mut self, id: NodeId, parent_id: NodeId) {
@@ -176,16 +211,53 @@ impl<T> Tree<T> {
             return;
         }
 
-        if let Some(old_parent_id) = self.get_node(id).unwrap().parent {
-            self.get_node_mut(old_parent_id)
-                .unwrap()
-                .children
-                .retain(|child_id| *child_id != id);
-        };
+        self.detach_from_parent(id);
 
         self.get_node_mut(id).unwrap().parent = Some(parent_id);
         self.get_node_mut(parent_id).unwrap().children.push(id);
     }
+
+    fn detach_from_parent(&mut self, id: NodeId) {
+        let Some(old_parent_id) = self.get_node(id).and_then(|node| node.parent) else {
+            return;
+        };
+
+        if let Some(old_parent) = self.get_node_mut(old_parent_id) {
+            old_parent.children.retain(|child_id| *child_id != id);
+        }
+
+        if let Some(node) = self.get_node_mut(id) {
+            node.parent = None;
+        }
+    }
+
+    fn get_parent_node(&self, id: NodeId) -> Option<&Node<T>> {
+        self.get_node(id)
+            .and_then(|node| node.parent)
+            .and_then(|parent_id| self.get_node(parent_id))
+    }
+
+    fn get_parent_node_mut(&mut self, id: NodeId) -> Option<&mut Node<T>> {
+        self.get_node(id)
+            .and_then(|node| node.parent)
+            .and_then(|parent_id| self.get_node_mut(parent_id))
+    }
+
+    fn get_children_nodes(&self, id: NodeId) -> Vec<&Node<T>> {
+        self.get_node(id)
+            .map(|node| {
+                node.children
+                    .iter()
+                    .filter_map(|id| self.get_node(*id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+enum Placement {
+    After,
+    Before,
 }
 
 struct TreeNodeTraversal<'a, T> {
