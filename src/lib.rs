@@ -1,5 +1,3 @@
-use std::{array, mem::take};
-
 use crate::node_id::NodeId;
 
 mod node_id;
@@ -16,19 +14,28 @@ struct Node<T> {
 pub struct Tree<T> {
     nodes: Vec<Option<Node<T>>>,
     free_slots: Vec<NodeId>,
-    root: Option<NodeId>,
+    root: NodeId,
 }
 
 impl<T> Tree<T> {
-    pub fn new() -> Self {
+    pub fn new(value: T) -> Self {
+        let root_id = NodeId::new(0);
+
+        let root = Node {
+            value,
+            parent: None,
+            children: Vec::new(),
+            generation: root_id.generation(),
+        };
+
         Self {
-            nodes: Vec::new(),
+            nodes: vec![Some(root)],
             free_slots: Vec::new(),
-            root: None,
+            root: root_id,
         }
     }
 
-    pub fn root(&self) -> Option<NodeId> {
+    pub fn root(&self) -> NodeId {
         self.root
     }
 
@@ -46,6 +53,16 @@ impl<T> Tree<T> {
             stack: vec![root],
             tree: self,
         }
+    }
+
+
+    //TODO double detach will be fixed
+    pub fn insert_to(&mut self, value: T, parent_id: NodeId) -> NodeId {
+        let id = self.insert(value);
+
+        self.move_node(id, parent_id, Placement::In);
+
+        id
     }
 
     pub fn insert(&mut self, value: T) -> NodeId {
@@ -70,11 +87,7 @@ impl<T> Tree<T> {
             self.nodes[id.index()] = Some(node);
         }
 
-        if let Some(root) = self.root {
-            self.move_node(id, root, Placement::In);
-        } else {
-            self.root = Some(id);
-        }
+        self.move_node(id, self.root, Placement::In);
 
         id
     }
@@ -85,11 +98,15 @@ impl<T> Tree<T> {
     }
 
     pub fn remove_node(&mut self, root_id: NodeId) {
-        if Some(root_id) == self.root {
+        if root_id == self.root {
             return;
         }
 
-        if let Some(parent_id) = self.get_node(root_id).unwrap().parent {
+        let Some(node) = self.get_node(root_id) else {
+            return;
+        };
+
+        if let Some(parent_id) = node.parent {
             self.get_node_mut(parent_id)
                 .unwrap()
                 .children
@@ -158,7 +175,7 @@ impl<T> Tree<T> {
     pub fn move_node(&mut self, id: NodeId, target_id: NodeId, placement: Placement) {
         match placement {
             Placement::In => {
-                self.place_node_under(id, target_id, None);
+                self.place_node_under(id, target_id);
             }
             Placement::Before => {
                 self.place_node_next_to(id, target_id, 0);
@@ -175,11 +192,11 @@ impl<T> Tree<T> {
         };
 
         if id == target_id
-            || Some(id) == self.root
+            || id == self.root
             || !self.contains(id)
             || !self.contains(target_id)
             || !self.contains(parent_id)
-            || self.is_ancestor(id, parent_id)
+            || self.is_ancestor(id, target_id)
         {
             return;
         }
@@ -198,9 +215,9 @@ impl<T> Tree<T> {
             .insert(target_position + offset, id);
     }
 
-    fn place_node_under(&mut self, id: NodeId, parent_id: NodeId, index: Option<usize>) {
+    fn place_node_under(&mut self, id: NodeId, parent_id: NodeId) {
         if id == parent_id
-            || Some(id) == self.root
+            || id == self.root
             || !self.contains(id)
             || !self.contains(parent_id)
             || self.is_ancestor(id, parent_id)
@@ -213,10 +230,7 @@ impl<T> Tree<T> {
 
         let parent = self.get_node_mut(parent_id).unwrap();
 
-        match index {
-            Some(index) => parent.children.insert(index, id),
-            None => parent.children.push(id),
-        }
+        parent.children.push(id);
     }
 
     pub fn contains(&self, id: NodeId) -> bool {
@@ -224,8 +238,11 @@ impl<T> Tree<T> {
     }
 
     fn find_child_index(&self, id: NodeId) -> Option<usize> {
-        self.parent_node(id)
-            .and_then(|node| node.children.iter().position(|node_id| node_id == &id))
+        let parent_id = self.parent(id)?;
+
+        self.children(parent_id)
+            .iter()
+            .position(|child_id| *child_id == id)
     }
 
     fn detach_from_parent(&mut self, id: NodeId) {
